@@ -364,17 +364,6 @@ public class Call implements CreateConnectionResponse, EventManager.Loggable,
     /** The state of the call. */
     private int mState;
 
-    /**
-     * Determines whether the {@link ConnectionService} has responded to the initial request to
-     * create the connection.
-     *
-     * {@code false} indicates the {@link Call} has been added to Telecom, but the
-     * {@link Connection} has not yet been returned by the associated {@link ConnectionService}.
-     * {@code true} indicates the {@link Call} has an associated {@link Connection} reported by the
-     * {@link ConnectionService}.
-     */
-    private boolean mIsCreateConnectionComplete = false;
-
     /** The handle with which to establish this call. */
     private Uri mHandle;
 
@@ -1063,19 +1052,6 @@ public class Call implements CreateConnectionResponse, EventManager.Loggable,
     @Override
     public ConnectionServiceFocusManager.ConnectionServiceFocus getConnectionServiceWrapper() {
         return mConnectionService;
-    }
-
-    /**
-     * @return {@code true} if the connection has been created by the underlying
-     * {@link ConnectionService}, {@code false} otherwise.
-     */
-    public boolean isCreateConnectionComplete() {
-        return mIsCreateConnectionComplete;
-    }
-
-    @VisibleForTesting
-    public void setIsCreateConnectionComplete(boolean isCreateConnectionComplete) {
-        mIsCreateConnectionComplete = isCreateConnectionComplete;
     }
 
     @VisibleForTesting
@@ -2248,7 +2224,6 @@ public class Call implements CreateConnectionResponse, EventManager.Loggable,
             CallIdMapper idMapper,
             ParcelableConference conference) {
         Log.v(this, "handleCreateConferenceSuccessful %s", conference);
-        mIsCreateConnectionComplete = true;
         setTargetPhoneAccount(conference.getPhoneAccount());
         setHandle(conference.getHandle(), conference.getHandlePresentation());
 
@@ -2282,7 +2257,6 @@ public class Call implements CreateConnectionResponse, EventManager.Loggable,
             CallIdMapper idMapper,
             ParcelableConnection connection) {
         Log.v(this, "handleCreateConnectionSuccessful %s", connection);
-        mIsCreateConnectionComplete = true;
         setTargetPhoneAccount(connection.getPhoneAccount());
         setHandle(connection.getHandle(), connection.getHandlePresentation());
         setCallerDisplayName(
