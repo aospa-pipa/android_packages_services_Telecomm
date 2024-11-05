@@ -39,7 +39,6 @@ import android.telecom.ConnectionService;
 import android.telecom.DisconnectCause;
 import android.telecom.GatewayInfo;
 import android.telecom.Log;
-import android.telecom.Logging.Runnable;
 import android.telecom.Logging.Session;
 import android.telecom.ParcelableConference;
 import android.telecom.ParcelableConnection;
@@ -65,11 +64,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
-import java.util.concurrent.ScheduledExecutorService;
-import java.util.concurrent.ScheduledFuture;
-import java.util.concurrent.TimeUnit;
 import java.util.Objects;
 
 /**
@@ -84,11 +78,6 @@ public class ConnectionServiceWrapper extends ServiceBinder implements
 
     private static final String TELECOM_ABBREVIATION = "cast";
 
-    private static final long SERVICE_BINDING_TIMEOUT = 15000L;
-    private ScheduledExecutorService mScheduledExecutor =
-            Executors.newSingleThreadScheduledExecutor();
-    // Pre-allocate space for 2 calls; realistically thats all we should ever need (tm)
-    private final Map<Call, ScheduledFuture<?>> mScheduledFutureMap = new ConcurrentHashMap<>(2);
     private final class Adapter extends IConnectionServiceAdapter.Stub {
 
         @Override
@@ -101,12 +90,6 @@ public class ConnectionServiceWrapper extends ServiceBinder implements
             try {
                 synchronized (mLock) {
                     logIncoming("handleCreateConnectionComplete %s", callId);
-                    Call call = mCallIdMapper.getCall(callId);
-                    if (mScheduledFutureMap.containsKey(call)) {
-                        ScheduledFuture<?> existingTimeout = mScheduledFutureMap.get(call);
-                        existingTimeout.cancel(false /* cancelIfRunning */);
-                        mScheduledFutureMap.remove(call);
-                    }
                     // Check status hints image for cross user access
                     if (connection.getStatusHints() != null) {
                         Icon icon = connection.getStatusHints().getIcon();
@@ -150,12 +133,6 @@ public class ConnectionServiceWrapper extends ServiceBinder implements
                         Icon icon = conference.getStatusHints().getIcon();
                         conference.getStatusHints().setIcon(StatusHints.
                                 validateAccountIconUserBoundary(icon, callingUserHandle));
-                    }
-                    Call call = mCallIdMapper.getCall(callId);
-                    if (mScheduledFutureMap.containsKey(call)) {
-                        ScheduledFuture<?> existingTimeout = mScheduledFutureMap.get(call);
-                        existingTimeout.cancel(false /* cancelIfRunning */);
-                        mScheduledFutureMap.remove(call);
                     }
                     ConnectionServiceWrapper.this
                             .handleCreateConferenceComplete(callId, request, conference);
@@ -1284,8 +1261,7 @@ public class ConnectionServiceWrapper extends ServiceBinder implements
      * @param context The context.
      * @param userHandle The {@link UserHandle} to use when binding.
      */
-    @VisibleForTesting
-    public ConnectionServiceWrapper(
+    ConnectionServiceWrapper(
             ComponentName componentName,
             ConnectionServiceRepository connectionServiceRepository,
             PhoneAccountRegistrar phoneAccountRegistrar,
@@ -1382,27 +1358,6 @@ public class ConnectionServiceWrapper extends ServiceBinder implements
                         .setIsAdhocConferenceCall(call.isAdhocConferenceCall())
                         .build();
 
-                if (mServiceInterface != null) {
-                	Runnable r = new Runnable("CSW.cC", mLock) {
-                            @Override
-                            public void loggedRun() {
-                                if (!call.isCreateConnectionComplete()) {
-                                    Log.e(this, new Exception(),
-                                            "Conference %s creation timeout",
-                                            getComponentName());
-                                    Log.addEvent(call, LogUtils.Events.CREATE_CONFERENCE_TIMEOUT,
-                                            Log.piiHandle(call.getHandle()) + " via:" +
-                                                    getComponentName().getPackageName());
-                                    response.handleCreateConferenceFailure(
-                                            new DisconnectCause(DisconnectCause.ERROR));
-                                }
-                            }
-                        };
-                // Post cleanup to the executor service and cache the future, so we can cancel it if
-                // needed.
-                ScheduledFuture<?> future = mScheduledExecutor.schedule(r.getRunnableToCancel(),
-                        SERVICE_BINDING_TIMEOUT, TimeUnit.MILLISECONDS);
-                mScheduledFutureMap.put(call, future);
                 try {
                     mServiceInterface.createConference(
                             call.getConnectionManagerPhoneAccount(),
@@ -1411,15 +1366,10 @@ public class ConnectionServiceWrapper extends ServiceBinder implements
                             call.shouldAttachToExistingConnection(),
                             call.isUnknown(),
                             Log.getExternalSession(TELECOM_ABBREVIATION));
-                    } catch (RemoteException e) {
-                        Log.e(this, e, "Failure to createConference -- %s", getComponentName());
-                        mPendingResponses.remove(callId).handleCreateConferenceFailure(
-                                new DisconnectCause(DisconnectCause.ERROR, e.toString()));
-                    }
-                } else {
-                    Log.w(this,"Failure to createConference -- %s", getComponentName());
+                } catch (RemoteException e) {
+                    Log.e(this, e, "Failure to createConference -- %s", getComponentName());
                     mPendingResponses.remove(callId).handleCreateConferenceFailure(
-                            new DisconnectCause(DisconnectCause.ERROR));
+                            new DisconnectCause(DisconnectCause.ERROR, e.toString()));
                 }
             }
 
@@ -1509,27 +1459,6 @@ public class ConnectionServiceWrapper extends ServiceBinder implements
                         .setRttPipeToInCall(call.getCsToInCallRttPipeForCs())
                         .build();
 
-                if (mServiceInterface != null) {
-                	Runnable r = new Runnable("CSW.cC", mLock) {
-                            @Override
-                            public void loggedRun() {
-                                if (!call.isCreateConnectionComplete()) {
-                                    Log.e(this, new Exception(),
-                                            "Connection %s creation timeout",
-                                            getComponentName());
-                                    Log.addEvent(call, LogUtils.Events.CREATE_CONNECTION_TIMEOUT,
-                                            Log.piiHandle(call.getHandle()) + " via:" +
-                                                    getComponentName().getPackageName());
-                                    response.handleCreateConnectionFailure(
-                                            new DisconnectCause(DisconnectCause.ERROR));
-                                }
-                            }
-                        };
-                // Post cleanup to the executor service and cache the future, so we can cancel it if
-                // needed.
-                ScheduledFuture<?> future = mScheduledExecutor.schedule(r.getRunnableToCancel(),
-                        SERVICE_BINDING_TIMEOUT, TimeUnit.MILLISECONDS);
-                mScheduledFutureMap.put(call, future);
                 try {
                     mServiceInterface.createConnection(
                             call.getConnectionManagerPhoneAccount(),
@@ -1542,12 +1471,6 @@ public class ConnectionServiceWrapper extends ServiceBinder implements
                     Log.e(this, e, "Failure to createConnection -- %s", getComponentName());
                     mPendingResponses.remove(callId).handleCreateConnectionFailure(
                             new DisconnectCause(DisconnectCause.ERROR, e.toString()));
-                    }
-                } else {
-                    Log.w(this, "Failure to createConnection; no service interface -- %s",
-                            getComponentName());
-                    mPendingResponses.remove(callId).handleCreateConnectionFailure(
-                            new DisconnectCause(DisconnectCause.ERROR));
                 }
             }
 
@@ -1957,8 +1880,7 @@ public class ConnectionServiceWrapper extends ServiceBinder implements
         }
     }
 
-    @VisibleForTesting
-    public void addCall(Call call) {
+    void addCall(Call call) {
         if (mCallIdMapper.getCallId(call) == null) {
             mCallIdMapper.addCall(call);
         }
@@ -2434,10 +2356,5 @@ public class ConnectionServiceWrapper extends ServiceBinder implements
         sb.append(mComponentName);
         sb.append("]");
         return sb.toString();
-    }
-
-    @VisibleForTesting
-    public void setScheduledExecutorService(ScheduledExecutorService service) {
-        mScheduledExecutor = service;
     }
 }
